@@ -1,0 +1,32 @@
+spring:
+  application:
+    name: dbtraining
+  datasource:
+    url: jdbc:postgresql://localhost:5432/performancedb
+    username: user
+    password: password
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        show_sql: true
+        format_sql: true
+        generate_statistics: true
+        # Log queries that take longer than 0ms (effectively all queries)
+        session.events.log.LOG_QUERIES_SLOWER_THAN_MS: 0
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+    schemas: public
+    baseline-version: 0
+
+db:
+  generate-data: ${DB_GENERATE_DATA:false}
+
+
+management:
+  endpoints.web.exposure.include: prometheus, health
+

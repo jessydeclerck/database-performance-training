@@ -1,0 +1,182 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://db:5432/performancedb
+      - SPRING_DATASOURCE_USERNAME=user
+      - SPRING_DATASOURCE_PASSWORD=password
+      - DB_GENERATE_DATA=true
+    volumes:
+      - .:/app   # Mount current directory to /app in the container
+      - maven_repo:/root/.m2   # Cache Maven dependencies
+    pull_policy: build
+    networks:
+      - app-network
+
+  db:
+    image: postgres:13
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=performancedb
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - pglog:/var/log/postgresql
+    command:
+      - "postgres"
+      - "-c"
+      - "logging_collector=on"
+      - "-c"
+      - "log_directory=/var/log/postgresql"
+      - "-c"
+      - "log_line_prefix='%t [%p]: '"
+      - "-c"
+      - "log_filename=postgresql.log"
+      - "-c"
+      - "log_statement=none"
+      - "-c"
+      - "log_min_duration_statement=0"
+      - "-c"
+      - "log_checkpoints=on"
+      - "-c"
+      - "log_connections=on"
+      - "-c"
+      - "log_disconnections=on"
+      - "-c"
+      - "log_lock_waits=on"
+      - "-c"
+      - "log_temp_files=0"
+      - "-c"
+      - "log_autovacuum_min_duration=0"
+    networks:
+      - app-network
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    ports:
+      - "5050:80"
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@example.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+      - PGADMIN_CONFIG_SERVER_MODE=False
+      - PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False
+      - PGADMIN_CONFIG_UPGRADE_CHECK_ENABLED=False
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./servers.json:/pgadmin4/servers.json
+      - ./pgpass:/pgadmin4/pgpass
+
+    depends_on:
+      - db
+    restart: always
+    networks:
+      - app-network
+
+  prometheus:
+    image: prom/prometheus:v2.30.3
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    networks:
+      - app-network
+
+  grafana:
+    image: grafana/grafana:8.2.2
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_DASHBOARDS_MIN_REFRESH_INTERVAL=5s
+      - GF_LOG_LEVEL=debug
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana-provisioning:/etc/grafana/provisioning
+      - ./postgresql_overview.json:/var/lib/grafana/dashboards/postgresql_overview.json
+      - ./spring_boot_stats.json:/var/lib/grafana/dashboards/spring_boot_stats.json
+    depends_on:
+      - prometheus
+    restart: always
+    networks:
+      - app-network
+
+  pgbadger:
+    image: dalibo/pgbadger
+    volumes:
+      - pglog:/var/log/postgresql:ro
+      - ./pgbadger_output:/pgbadger_output
+    command: >
+      /var/log/postgresql/postgresql.log 
+      --outfile /pgbadger_output/report.html
+      -f stderr
+    profiles:
+      - analysis
+    networks:
+      - app-network
+
+  postgres-exporter:
+    image: wrouesnel/postgres_exporter:latest
+    ports:
+      - "9187:9187"
+    environment:
+      - DATA_SOURCE_NAME=postgresql://user:password@db:5432/performancedb?sslmode=disable
+    depends_on:
+      - db
+    networks:
+      - app-network
+
+  influxdb:
+    image: influxdb:1.8
+    networks:
+      - app-network
+    ports:
+      - "8086:8086"
+    environment:
+      - INFLUXDB_DB=k6
+    profiles:
+      - bulk-inserts
+
+  k6:
+    image: grafana/k6:latest
+    networks:
+      - app-network
+    ports:
+      - "6565:6565"
+      - "5665:5665"
+    environment:
+      - K6_OUT=influxdb=http://influxdb:8086/k6
+    volumes:
+      - ./k6-scripts:/scripts
+    command: ["run", "/scripts/bulk-insert.js", "--out", "web-dashboard"]
+    depends_on:
+      - influxdb
+    profiles:
+      - bulk-inserts
+
+volumes:
+  postgres_data:
+  pgadmin_data:
+  prometheus_data:
+  grafana_data:
+  pglog:
+  maven_repo:
+
+networks:
+  app-network:
+    driver: bridge
